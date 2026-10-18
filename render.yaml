@@ -1,0 +1,30 @@
+# Render Blueprint for DisputeDesk. See README "Deploying to Render".
+services:
+  - type: web
+    name: disputedesk
+    runtime: node
+    plan: starter # a persistent disk needs a paid plan; on "free", remove the disk block (cases reset on each deploy)
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/disputes
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: USE_MOCK_PAYPAL
+        value: "true"
+      - key: PAYPAL_BASE_URL
+        value: https://api-m.sandbox.paypal.com
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-5-5
+      - key: DATABASE_PATH
+        value: /var/data/disputedesk.db
+    disk:
+      name: disputedesk-data
+      mountPath: /var/data
+      sizeGB: 1
