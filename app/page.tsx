@@ -7,7 +7,7 @@ import { CategoryBadge, ErrorBanner, ModeBadges, RecommendationBadge, Skeleton, 
 import { daysUntil, dueLabel, formatDate, formatMoney, REASON_LABEL, STATUS_LABEL } from "@/lib/format";
 import type { CaseStatus, DisputeListItem } from "@/lib/types";
 
-type Meta = { paypalMode: "mock" | "sandbox"; aiMode: "claude" | "offline"; model?: string };
+type Meta = { paypalMode: "mock" | "sandbox"; aiMode: "claude" | "gemini" | "offline"; model?: string };
 const FILTERS: ("all" | CaseStatus)[] = ["all", "new", "analyzed", "approved", "resolved", "rejected"];
 
 export default function Dashboard() {

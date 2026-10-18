@@ -5,7 +5,7 @@ import { z } from "zod";
 import { executeResolution } from "./actions";
 import { AgentError, runAgent } from "./agent";
 import { RECOMMENDATIONS } from "./agent-schema";
-import { aiMode, config } from "./config";
+import { aiMode, aiModel, config } from "./config";
 import { getDispute, getOrderDetails, getTracking, invalidateDispute, NotFoundError } from "./disputes";
 import { getStore } from "./store";
 import type { ActionOutcome, AgentStep, CaseRecord, Dispute } from "./types";
@@ -24,7 +24,7 @@ export function appMeta() {
   return {
     paypalMode: config.useMockPayPal ? ("mock" as const) : ("sandbox" as const),
     aiMode: aiMode(),
-    model: aiMode() === "claude" ? config.anthropic.model : undefined,
+    model: aiModel(),
   };
 }
 

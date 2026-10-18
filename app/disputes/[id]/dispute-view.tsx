@@ -18,7 +18,7 @@ import {
 import { dueLabel, formatDate, formatMoney, RECOMMENDATION_LABEL, REASON_LABEL } from "@/lib/format";
 import type { AgentStep, CaseRecord, Dispute, OrderDetails, Recommendation, TrackingInfo } from "@/lib/types";
 
-type Meta = { paypalMode: "mock" | "sandbox"; aiMode: "claude" | "offline"; model?: string };
+type Meta = { paypalMode: "mock" | "sandbox"; aiMode: "claude" | "gemini" | "offline"; model?: string };
 interface Detail {
   dispute: Dispute;
   order: OrderDetails;
@@ -187,7 +187,7 @@ export function DisputeView({ id }: { id: string }) {
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Agent steps</h3>
                   {c?.agentMode && !analyzing && (
                     <span className="text-xs text-slate-400">
-                      {c.agentMode === "claude" ? c.model : "offline rules engine"} · {formatDate(c.updatedAt, true)}
+                      {c.agentMode === "offline" ? "offline rules engine" : c.model} · {formatDate(c.updatedAt, true)}
                     </span>
                   )}
                 </div>

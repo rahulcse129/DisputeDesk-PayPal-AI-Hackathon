@@ -96,7 +96,7 @@ export function Skeleton({ className }: { className?: string }) {
   return <div className={cx("animate-pulse rounded-md bg-slate-200/70", className)} />;
 }
 
-export function ModeBadges({ meta }: { meta?: { paypalMode: "mock" | "sandbox"; aiMode: "claude" | "offline"; model?: string } }) {
+export function ModeBadges({ meta }: { meta?: { paypalMode: "mock" | "sandbox"; aiMode: "claude" | "gemini" | "offline"; model?: string } }) {
   if (!meta) return null;
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -112,11 +112,11 @@ export function ModeBadges({ meta }: { meta?: { paypalMode: "mock" | "sandbox"; 
       <span
         className={cx(
           "rounded-full px-2.5 py-1 font-medium ring-1 ring-inset",
-          meta.aiMode === "claude" ? "bg-violet-50 text-violet-700 ring-violet-600/20" : "bg-slate-100 text-slate-600 ring-slate-500/20",
+          meta.aiMode === "claude" ? "bg-violet-50 text-violet-700 ring-violet-600/20" : meta.aiMode === "gemini" ? "bg-sky-50 text-sky-700 ring-sky-600/20" : "bg-slate-100 text-slate-600 ring-slate-500/20",
         )}
-        title={meta.aiMode === "claude" ? "Claude agent" : "No ANTHROPIC_API_KEY: offline rules engine"}
+        title={meta.aiMode === "claude" ? "Claude agent" : meta.aiMode === "gemini" ? "Gemini agent" : "No AI API key: offline rules engine"}
       >
-        AI: {meta.aiMode === "claude" ? meta.model : "Offline rules"}
+        AI: {meta.aiMode === "offline" ? "Offline rules" : meta.model}
       </span>
     </div>
   );

@@ -18,8 +18,14 @@ services:
         sync: false
       - key: PAYPAL_CLIENT_SECRET
         sync: false
+      - key: AI_PROVIDER
+        value: ""
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-5-5
       - key: DATABASE_PATH

@@ -147,7 +147,7 @@ export interface CaseRecord {
   category?: Category;
   resolution?: Resolution;
   trace?: AgentStep[];
-  agentMode?: "claude" | "offline";
+  agentMode?: "claude" | "gemini" | "offline";
   model?: string;
   finalMessage?: string;
   decision?: "approved" | "rejected";

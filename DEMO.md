@@ -7,7 +7,7 @@ npm run reset      # with the dev server stopped: clean case history (seeded pas
 npm run dev
 ```
 
-- Use mock PayPal data so every case is ready. Set `ANTHROPIC_API_KEY` so the badge reads the Claude model, not "Offline rules".
+- Use mock PayPal data so every case is ready. Set `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` so the badge shows the model name, not "Offline rules".
 - Browser at 1440×900, zoom 100%. Open http://localhost:3000 once beforehand so routes are compiled.
 - Keep a second tab on `/disputes/PP-D-1005` ready.
 

@@ -6,7 +6,7 @@ A small merchant losing a $90 dispute also loses the dispute fee and the hour it
 
 The merchant stays in control. **No money moves and no message is sent until they click Approve**, and they can edit the draft or pick a different action first.
 
-![flow](https://img.shields.io/badge/PayPal-Disputes%20%2B%20Payments%20APIs-003087) ![ai](https://img.shields.io/badge/AI-Claude%20tool%20use-7c3aed) ![mode](https://img.shields.io/badge/runs-offline%20with%20mock%20data-64748b)
+![flow](https://img.shields.io/badge/PayPal-Disputes%20%2B%20Payments%20APIs-003087) ![ai](https://img.shields.io/badge/AI-Claude%20%7C%20Gemini%20tool%20use-7c3aed) ![mode](https://img.shields.io/badge/runs-offline%20with%20mock%20data-64748b)
 
 ---
 
@@ -20,13 +20,13 @@ npm run dev
 Open http://localhost:3000. With no configuration the app runs fully offline:
 
 - **PayPal: Mock data.** Ten seeded disputes covering every category: delivered, stalled and untracked shipments, a repeat disputer, a loyal customer, a real double charge and a fake one.
-- **AI: Offline rules.** Without `ANTHROPIC_API_KEY` a deterministic rules engine runs the same tools and produces the same trace and output schema, so the demo never breaks.
+- **AI: Offline rules.** Without an AI key a deterministic rules engine runs the same tools and produces the same trace and output schema, so the demo never breaks.
 
 Add your keys to use the real thing:
 
 ```bash
 cp .env.example .env.local
-# set ANTHROPIC_API_KEY for the Claude agent
+# set ANTHROPIC_API_KEY for the Claude agent, or GEMINI_API_KEY (+ AI_PROVIDER=gemini) for Gemini
 # set USE_MOCK_PAYPAL=false + PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET for the PayPal sandbox
 ```
 
@@ -47,9 +47,12 @@ The badges in the top right of every page show which mode is active.
 | `USE_MOCK_PAYPAL` | `true` if no PayPal credentials | `false` = call the PayPal sandbox |
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | empty | Sandbox REST app credentials (developer.paypal.com → Apps & Credentials) |
 | `PAYPAL_BASE_URL` | `https://api-m.sandbox.paypal.com` | PayPal API host |
-| `ANTHROPIC_API_KEY` | empty | Enables the Claude agent. Without it, the offline rules engine runs. |
+| `AI_PROVIDER` | empty | `anthropic`, `gemini` or `offline`. Empty = first provider with a key (Anthropic, then Gemini), else offline. |
+| `ANTHROPIC_API_KEY` | empty | Enables the Claude agent |
 | `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Model for the agent |
 | `ANTHROPIC_SERVER_FALLBACK` | `true` | Server-side refusal fallback (beta) for supported models |
+| `GEMINI_API_KEY` | empty | Enables the Gemini agent (`GOOGLE_API_KEY` also works) |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Model for the Gemini agent |
 | `DATABASE_PATH` | `./data/disputedesk.db` | SQLite file for cases |
 
 All secrets are read server-side only. `.env*` files are git-ignored except `.env.example`.
@@ -81,7 +84,7 @@ Sandbox details it handles:
 
 ### AI
 
-The agent (`lib/agent.ts`) is a Claude **tool-use loop** using the Anthropic TypeScript SDK. Each step is streamed to the UI as it happens.
+The agent (`lib/agent.ts`) is a **tool-use loop** that runs on Claude (Anthropic TypeScript SDK) or on Gemini (`@google/genai`, `lib/agent-gemini.ts`). Both use the same system prompt, the same tool schemas and the same validated `propose_resolution` contract, so you can switch providers with one env var and compare them on the same disputes. Each step is streamed to the UI as it happens.
 
 | Tool | What it returns |
 | --- | --- |
@@ -98,7 +101,7 @@ What makes it more than a prompt:
 - **Visible reasoning.** The UI shows each tool call with its input, result and timing. On supported models it also shows Claude's short progress notes between tool calls (`thinking.display: "updates"`).
 - **Safe by construction.** The agent's tools are read-only, and `propose_resolution` only *records* a proposal. Money-moving and messaging calls live in `lib/actions.ts`, which only the approve route imports. A test asserts that no agent tool can refund, accept, send or submit.
 - **Prompt-injection aware.** Buyer messages are marked as untrusted data in the system prompt, and every tool is scoped to the dispute being analyzed. A buyer message saying "look at dispute X" can't make the agent read another case.
-- **Robust.** Handles parallel tool calls, `pause_turn`, `max_tokens` and `refusal` stop reasons. Server-side refusal fallback (beta) is on by default for supported models. API errors are turned into plain-language messages.
+- **Robust.** On Gemini, model turns are passed back unchanged so thought signatures survive between turns, and thought summaries appear in the trace. On Claude it handles parallel tool calls, `pause_turn`, `max_tokens` and `refusal` stop reasons. Server-side refusal fallback (beta) is on by default for supported models. API errors are turned into plain-language messages.
 
 ---
 
@@ -123,7 +126,7 @@ flowchart LR
     DS[Data source<br/>lib/disputes.ts]
   end
 
-  C[Claude API<br/>tool use]
+  C[Claude or Gemini<br/>tool use]
   PP[PayPal REST<br/>Disputes v1 · Orders v2 · Payments v2]
   M[Seed data<br/>USE_MOCK_PAYPAL]
 
@@ -150,7 +153,9 @@ lib/
   paypal.ts                    typed PayPal client + normalizers
   seed.ts                      mock disputes and historical cases
   disputes.ts                  mock/sandbox data source behind one interface
-  agent.ts                     Claude tool-use loop, trace, error handling
+  agent.ts                     Claude tool-use loop, provider switch, trace, error handling
+  agent-gemini.ts              Gemini tool-use loop (same tools and contract)
+  agent-prompt.ts              system prompt shared by both providers
   agent-tools.ts               tool definitions + read-only implementations
   agent-schema.ts              Zod schemas (tool inputs + resolution)
   agent-offline.ts             deterministic fallback agent
@@ -184,7 +189,7 @@ Sandbox disputes can take a few minutes to appear in the API. If you can't creat
 The repo includes a `render.yaml` blueprint.
 
 1. Push the repo to GitHub, then in Render choose **New → Blueprint** and pick the repo.
-2. Fill in the `sync: false` secrets when prompted: `ANTHROPIC_API_KEY`, and for sandbox mode `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` with `USE_MOCK_PAYPAL=false`.
+2. Fill in the `sync: false` secrets when prompted: `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` (set `AI_PROVIDER=gemini` to force Gemini), and for sandbox mode `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` with `USE_MOCK_PAYPAL=false`.
 3. Deploy. Build is `npm ci && npm run build`, start is `npm start` (Next.js reads Render's `PORT`), and the health check is `/api/disputes`.
 
 Notes:
@@ -205,6 +210,7 @@ npm test
 
 - **Agent output schema:** valid and invalid resolutions (bad enums, confidence out of range, empty draft, extra fields, missing fields).
 - **Tool safety:** the agent's tool list contains no money-moving or messaging tool, every tool schema is a valid object schema, and access to another dispute is refused.
+- **Gemini loop** (mocked SDK): provider selection, parallel calls answered by id, thought signatures passed back, an invalid proposal returned as an error and fixed, cross-dispute access refused, clean failure when no proposal arrives.
 - **Agent runs:** each of the 10 seeded disputes produces a schema-valid resolution with the expected recommendation and tool sequence.
 - **Approve route:** requires analysis, executes once, rejects repeats (409), concurrent approvals execute exactly once, uses the edited draft and action override, validates the body, allows a retry after a failure, and blocks approval after Reject or re-analysis after execution.
 
