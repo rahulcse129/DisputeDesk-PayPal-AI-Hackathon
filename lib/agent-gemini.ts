@@ -2,7 +2,16 @@
 // propose_resolution contract and trace as the Claude loop in agent.ts.
 // Selected with AI_PROVIDER=gemini (or automatically when only GEMINI_API_KEY is set).
 
-import { ApiError, FunctionCallingConfigMode, GoogleGenAI, type Content, type FunctionDeclaration, type Part } from "@google/genai";
+import {
+  ApiError,
+  FunctionCallingConfigMode,
+  GoogleGenAI,
+  type Content,
+  type FunctionDeclaration,
+  type GenerateContentParameters,
+  type GenerateContentResponse,
+  type Part,
+} from "@google/genai";
 import type { ResolutionOutput } from "./agent-schema";
 import { MAX_TURNS, SYSTEM_PROMPT } from "./agent-prompt";
 import { TOOL_DEFINITIONS } from "./agent-tools";
@@ -16,16 +25,54 @@ const FUNCTION_DECLARATIONS: FunctionDeclaration[] = TOOL_DEFINITIONS.map((t) =>
   parametersJsonSchema: t.input_schema,
 }));
 
-export async function runGeminiAgent(disputeId: string, exec: ToolExecutor): Promise<ResolutionOutput> {
+/** Retry settings for overloaded or rate-limited responses (exported so tests can shorten them). */
+export const retryPolicy = { attempts: 3, baseDelayMs: 1000 };
+const TRANSIENT = new Set([429, 500, 503, 504]);
+
+export const isTransient = (e: unknown) => e instanceof ApiError && TRANSIENT.has(e.status);
+
+async function generate(ai: GoogleGenAI, params: GenerateContentParameters): Promise<GenerateContentResponse> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (e) {
+      if (!isTransient(e) || attempt >= retryPolicy.attempts) throw e;
+      // Exponential backoff with jitter: ~1s, ~2s, ...
+      const delay = retryPolicy.baseDelayMs * 2 ** (attempt - 1) * (0.75 + Math.random() / 2);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
+
+/**
+ * Runs the agent on the configured Gemini model. If that model stays overloaded after
+ * retries (Gemini returns 503 "high demand" during spikes), the run restarts on the
+ * fallback model so the merchant still gets an answer. Returns the model that answered.
+ */
+export async function runGeminiAgent(disputeId: string, exec: ToolExecutor): Promise<{ resolution: ResolutionOutput; model: string }> {
   const ai = new GoogleGenAI({ apiKey: config.gemini.apiKey });
+  const { model, fallbackModel } = config.gemini;
+  const models = fallbackModel && fallbackModel !== "none" && fallbackModel !== model ? [model, fallbackModel] : [model];
+
+  for (let i = 0; ; i++) {
+    try {
+      return { resolution: await converse(ai, models[i], disputeId, exec), model: models[i] };
+    } catch (e) {
+      if (!isTransient(e) || i + 1 >= models.length) throw e;
+      exec.record({ kind: "note", summary: `${models[i]} is overloaded right now (${(e as ApiError).status}); retrying the analysis on ${models[i + 1]}.` });
+    }
+  }
+}
+
+async function converse(ai: GoogleGenAI, model: string, disputeId: string, exec: ToolExecutor): Promise<ResolutionOutput> {
   const contents: Content[] = [
     { role: "user", parts: [{ text: `Analyze PayPal dispute ${disputeId} and propose a resolution for the merchant.` }] },
   ];
   let nudged = false;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const response = await ai.models.generateContent({
-      model: config.gemini.model,
+    const response = await generate(ai, {
+      model,
       contents,
       config: {
         systemInstruction: SYSTEM_PROMPT,
@@ -86,8 +133,8 @@ export function geminiFriendlyError(e: unknown): string | undefined {
   if (!(e instanceof ApiError)) return undefined;
   if (e.status === 400 && /api key/i.test(e.message)) return "Gemini API key was rejected. Check GEMINI_API_KEY.";
   if (e.status === 401 || e.status === 403) return "Gemini API key was rejected or lacks access. Check GEMINI_API_KEY.";
-  if (e.status === 404) return `Gemini model "${config.gemini.model}" was not found. Check GEMINI_MODEL.`;
+  if (e.status === 404) return `Gemini model was not found (${e.message.slice(0, 120)}). Check GEMINI_MODEL and GEMINI_FALLBACK_MODEL.`;
   if (e.status === 429) return "Gemini rate limit or quota reached. Wait a moment and try again.";
-  if (e.status >= 500) return `Gemini is having trouble right now (${e.status}). Try again shortly.`;
+  if (e.status >= 500) return `Gemini is overloaded or unavailable right now (${e.status}), even after retrying. Try again shortly.`;
   return `Gemini API error (${e.status}): ${e.message}`;
 }

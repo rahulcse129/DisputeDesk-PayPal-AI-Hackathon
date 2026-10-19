@@ -1,0 +1,566 @@
+{
+  "info": {
+    "name": "PayPal Sandbox for DisputeDesk",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "The PayPal REST endpoints DisputeDesk uses, against the **sandbox**. Use it to inspect and prepare sandbox data, and to simulate PayPal's decision on a dispute.\n\n1. Create a sandbox REST app at developer.paypal.com and set `clientId` and `clientSecret` (use the *PayPal Sandbox* environment).\n2. An OAuth token is fetched automatically before each request.\n3. Open disputes as a sandbox buyer (sandbox.paypal.com > Activity > Report a problem), then use these requests.\n\n**Sandbox only:** the *Simulate* requests exist only in the sandbox and mimic PayPal's own review."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Fetch an OAuth token automatically if there isn't a fresh one.",
+          "const exp = Number(pm.collectionVariables.get(\"accessTokenExpiry\") || 0);",
+          "if (pm.info.requestName !== \"Get access token\" && !(pm.collectionVariables.get(\"accessToken\") && Date.now() < exp)) {",
+          "  pm.sendRequest({",
+          "    url: pm.variables.get(\"paypalBaseUrl\") + \"/v1/oauth2/token\",",
+          "    method: \"POST\",",
+          "    header: {",
+          "      Authorization: \"Basic \" + btoa(pm.variables.get(\"clientId\") + \":\" + pm.variables.get(\"clientSecret\")),",
+          "      \"Content-Type\": \"application/x-www-form-urlencoded\"",
+          "    },",
+          "    body: { mode: \"raw\", raw: \"grant_type=client_credentials\" }",
+          "  }, (err, res) => {",
+          "    if (err || res.code !== 200) { console.error(\"PayPal OAuth failed\", err || res.text()); return; }",
+          "    const j = res.json();",
+          "    pm.collectionVariables.set(\"accessToken\", j.access_token);",
+          "    pm.collectionVariables.set(\"accessTokenExpiry\", String(Date.now() + (j.expires_in - 60) * 1000));",
+          "  });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "paypalBaseUrl",
+      "value": "https://api-m.sandbox.paypal.com"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "accessTokenExpiry",
+      "value": "0"
+    },
+    {
+      "key": "disputeId",
+      "value": ""
+    },
+    {
+      "key": "captureId",
+      "value": ""
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Get access token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/oauth2/token",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "oauth2",
+                "token"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                }
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{clientId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{clientSecret}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.collectionVariables.set(\"accessToken\", j.access_token);",
+                  "pm.collectionVariables.set(\"accessTokenExpiry\", String(Date.now() + (j.expires_in - 60) * 1000));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Disputes (read)",
+      "item": [
+        {
+          "name": "List disputes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/customer/disputes?page_size=20",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customer",
+                "disputes"
+              ],
+              "query": [
+                {
+                  "key": "page_size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const items = pm.response.json().items || [];",
+                  "if (items[0] && !pm.collectionVariables.get(\"disputeId\")) pm.collectionVariables.set(\"disputeId\", items[0].dispute_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Show dispute details",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/customer/disputes/{{disputeId}}",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customer",
+                "disputes",
+                "{{disputeId}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const tx = (pm.response.json().disputed_transactions || [])[0];",
+                  "if (tx && tx.seller_transaction_id) pm.collectionVariables.set(\"captureId\", tx.seller_transaction_id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Order, payment and tracking",
+      "item": [
+        {
+          "name": "Show captured payment",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v2/payments/captures/{{captureId}}",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "payments",
+                "captures",
+                "{{captureId}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const rel = (pm.response.json().supplementary_data || {}).related_ids || {};",
+                  "if (rel.order_id) pm.collectionVariables.set(\"orderId\", rel.order_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Show order",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v2/checkout/orders/{{orderId}}",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "checkout",
+                "orders",
+                "{{orderId}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List trackers for transaction",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/shipping/trackers?transaction_id={{captureId}}",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "shipping",
+                "trackers"
+              ],
+              "query": [
+                {
+                  "key": "transaction_id",
+                  "value": "{{captureId}}"
+                }
+              ]
+            },
+            "description": "Not every sandbox account has tracking; DisputeDesk treats an error here as 'no tracking on file'."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dispute actions (what Approve calls)",
+      "item": [
+        {
+          "name": "Provide evidence (contest)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/customer/disputes/{{disputeId}}/provide-evidence",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customer",
+                "disputes",
+                "{{disputeId}}",
+                "provide-evidence"
+              ]
+            },
+            "description": "multipart/form-data with the JSON payload in an `input` part. Requires status WAITING_FOR_SELLER_RESPONSE.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "input",
+                  "type": "text",
+                  "contentType": "application/json",
+                  "value": "{\"evidences\": [{\"evidence_type\": \"PROOF_OF_FULFILLMENT\", \"evidence_info\": {\"tracking_info\": [{\"carrier_name\": \"UPS\", \"tracking_number\": \"1Z999AA10123456784\"}]}, \"notes\": \"Delivered and signed for at the buyer's shipping address.\"}]}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Refund captured payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "PayPal-Request-Id",
+                "value": "disputedesk-{{disputeId}}-refund"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v2/payments/captures/{{captureId}}/refund",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v2",
+                "payments",
+                "captures",
+                "{{captureId}}",
+                "refund"
+              ]
+            },
+            "description": "The fixed PayPal-Request-Id makes this idempotent: sending it twice returns the same refund instead of refunding again.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note_to_payer\": \"Refund for your dispute. Sorry for the trouble.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Accept claim",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/customer/disputes/{{disputeId}}/accept-claim",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customer",
+                "disputes",
+                "{{disputeId}}",
+                "accept-claim"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"We accept this claim.\",\n  \"accept_claim_type\": \"REFUND\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Send message to buyer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/customer/disputes/{{disputeId}}/send-message",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customer",
+                "disputes",
+                "{{disputeId}}",
+                "send-message"
+              ]
+            },
+            "description": "Only allowed while dispute_life_cycle_stage is INQUIRY.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Hi, we're looking into this and will get back to you shortly.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sandbox simulation",
+      "item": [
+        {
+          "name": "Simulate: require seller evidence",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/customer/disputes/{{disputeId}}/require-evidence",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customer",
+                "disputes",
+                "{{disputeId}}",
+                "require-evidence"
+              ]
+            },
+            "description": "Sandbox only. Moves a dispute from UNDER_REVIEW to WAITING_FOR_SELLER_RESPONSE so evidence can be submitted.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"SELLER_EVIDENCE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Simulate: settle dispute (seller wins)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/customer/disputes/{{disputeId}}/adjudicate",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customer",
+                "disputes",
+                "{{disputeId}}",
+                "adjudicate"
+              ]
+            },
+            "description": "Sandbox only. Mimics PayPal's decision; DisputeDesk then shows the case as Resolved.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"adjudication_outcome\": \"SELLER_FAVOR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Simulate: settle dispute (buyer wins)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{paypalBaseUrl}}/v1/customer/disputes/{{disputeId}}/adjudicate",
+              "host": [
+                "{{paypalBaseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "customer",
+                "disputes",
+                "{{disputeId}}",
+                "adjudicate"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"adjudication_outcome\": \"BUYER_FAVOR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

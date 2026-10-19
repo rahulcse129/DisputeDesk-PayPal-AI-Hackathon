@@ -5,6 +5,8 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config";
+import { createElasticStore } from "./elastic";
+import { searchableText } from "./case-text";
 import { seedHistoricalCases } from "./seed";
 import type { ActionOutcome, CaseRecord, Category } from "./types";
 
@@ -14,6 +16,8 @@ export interface SearchOptions {
   limit?: number;
 }
 
+export type SearchBackend = "sqlite" | "elastic" | "elastic-semantic";
+
 export type ApprovalClaim =
   | { ok: true }
   | { ok: false; reason: "in_progress" | "already_executed"; outcome?: ActionOutcome };
@@ -22,7 +26,9 @@ export interface CaseStore {
   get(disputeId: string): CaseRecord | undefined;
   list(): CaseRecord[];
   upsert(record: CaseRecord): CaseRecord;
-  search(query: string, opts?: SearchOptions): CaseRecord[];
+  search(query: string, opts?: SearchOptions): Promise<CaseRecord[]>;
+  /** Which engine answers search(), shown in the UI. */
+  searchBackend(): SearchBackend;
   /** Atomically claims the right to execute an approval. Only one caller ever gets ok: true per dispute (unless a prior attempt failed). */
   claimApproval(disputeId: string): ApprovalClaim;
   completeApproval(disputeId: string, outcome: ActionOutcome): void;
@@ -82,7 +88,11 @@ class SqliteCaseStore implements CaseStore {
     return record;
   }
 
-  search(query: string, opts: SearchOptions = {}): CaseRecord[] {
+  searchBackend(): SearchBackend {
+    return "sqlite";
+  }
+
+  async search(query: string, opts: SearchOptions = {}): Promise<CaseRecord[]> {
     const limit = opts.limit ?? 20;
     const terms = query
       .toLowerCase()
@@ -146,29 +156,15 @@ class SqliteCaseStore implements CaseStore {
   }
 }
 
-function searchableText(c: CaseRecord): string {
-  return [
-    c.disputeId,
-    c.reason.replace(/_/g, " "),
-    c.category?.replace(/_/g, " "),
-    c.buyerName,
-    c.buyerEmail,
-    c.buyerClaim,
-    c.resolution?.recommendation,
-    c.resolution?.reasoning,
-    ...(c.resolution?.evidence_points ?? []),
-    c.result,
-    c.decisionNote,
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
 // One store per server process. Cached on globalThis so dev-server hot reloads reuse the connection.
 const g = globalThis as unknown as { __disputeDeskStore?: CaseStore };
 
 export function getStore(): CaseStore {
-  g.__disputeDeskStore ??= new SqliteCaseStore(config.databasePath);
+  // SQLite is the system of record; when Elastic is configured it also powers search.
+  if (!g.__disputeDeskStore) {
+    const sqlite = new SqliteCaseStore(config.databasePath);
+    g.__disputeDeskStore = createElasticStore(sqlite) ?? sqlite;
+  }
   return g.__disputeDeskStore;
 }
 

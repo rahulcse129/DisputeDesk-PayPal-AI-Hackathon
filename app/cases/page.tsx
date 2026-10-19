@@ -6,6 +6,12 @@ import { CategoryBadge, ErrorBanner, RecommendationBadge, Skeleton, Spinner, Sta
 import { CATEGORY_LABEL, formatDate, formatMoney } from "@/lib/format";
 import type { CaseRecord, Category } from "@/lib/types";
 
+const BACKEND_LABEL: Record<string, string> = {
+  "elastic-semantic": "Elastic (hybrid keyword + semantic)",
+  elastic: "Elastic (keyword)",
+  sqlite: "SQLite full-text",
+};
+
 const RESULT_STYLE: Record<string, string> = {
   won: "bg-emerald-50 text-emerald-700",
   lost: "bg-rose-50 text-rose-700",
@@ -18,6 +24,7 @@ export default function CasesPage() {
   const [q, setQ] = useState("");
   const [category, setCategory] = useState<Category | "">("");
   const [cases, setCases] = useState<CaseRecord[] | null>(null);
+  const [backend, setBackend] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,6 +40,7 @@ export default function CasesPage() {
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`);
         setCases(body.cases);
+        setBackend(body.backend);
       } catch (e) {
         if ((e as Error).name !== "AbortError") setError((e as Error).message);
       } finally {
@@ -52,6 +60,12 @@ export default function CasesPage() {
         <p className="mt-1 text-sm text-slate-600">
           Every dispute, recommendation, decision and outcome. The agent searches these same cases for precedent.
         </p>
+        {backend && (
+          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
+            <span className={cx("h-1.5 w-1.5 rounded-full", backend.startsWith("elastic") ? "bg-teal-500" : "bg-slate-400")} />
+            Search: {BACKEND_LABEL[backend] ?? backend}
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row">

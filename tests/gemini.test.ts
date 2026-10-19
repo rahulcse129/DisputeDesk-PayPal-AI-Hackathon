@@ -4,12 +4,15 @@ import type { Content, GenerateContentParameters } from "@google/genai";
 // Scripted Gemini responses: each call to generateContent returns the next one.
 const script: { parts: Record<string, unknown>[]; finishReason?: string }[] = [];
 const requests: GenerateContentParameters[] = [];
+// Models that answer every request with 503 "high demand".
+const overloaded = new Set<string>();
 
 vi.mock("@google/genai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@google/genai")>();
   class FakeGoogleGenAI {
     models = {
       generateContent: async (req: GenerateContentParameters) => {
+        if (overloaded.has(req.model)) throw new actual.ApiError({ message: "This model is currently experiencing high demand.", status: 503 });
         // Snapshot: the loop keeps appending to the same contents array.
         requests.push({ ...req, contents: structuredClone(req.contents) });
         const next = script.shift();
@@ -27,6 +30,8 @@ vi.mock("@google/genai", async (importOriginal) => {
 
 const { config, aiMode } = await import("@/lib/config");
 const { runAgent } = await import("@/lib/agent");
+const { retryPolicy } = await import("@/lib/agent-gemini");
+retryPolicy.baseDelayMs = 0;
 const { createMemoryStore, setStoreForTests } = await import("@/lib/store");
 
 const id = "PP-D-1001";
@@ -45,6 +50,7 @@ describe("Gemini agent loop", () => {
     setStoreForTests(createMemoryStore());
     script.length = 0;
     requests.length = 0;
+    overloaded.clear();
     config.gemini.apiKey = "test-key";
     config.aiProvider = "gemini";
   });
@@ -99,6 +105,23 @@ describe("Gemini agent loop", () => {
     await runAgent(id);
     const turn2 = requests[1].contents as Content[];
     expect(String(turn2.at(-1)?.parts?.[0].functionResponse?.response?.error)).toMatch(/scoped to dispute PP-D-1001/);
+  });
+
+  it("retries an overloaded model, then finishes on the fallback model", async () => {
+    overloaded.add(config.gemini.model);
+    script.push({ parts: [call("propose_resolution", proposal, "f1")] });
+    const result = await runAgent(id);
+    expect(result.model).toBe(config.gemini.fallbackModel);
+    expect(result.resolution).toEqual(proposal);
+    // Primary was tried retryPolicy.attempts times before switching.
+    expect(requests.length).toBe(1);
+    expect(result.trace.some((s) => s.kind === "note" && /overloaded.*retrying the analysis on/.test(s.summary))).toBe(true);
+  });
+
+  it("reports a clear error when every Gemini model is overloaded", async () => {
+    overloaded.add(config.gemini.model);
+    overloaded.add(config.gemini.fallbackModel);
+    await expect(runAgent(id)).rejects.toThrow(/overloaded or unavailable right now \(503\)/);
   });
 
   it("fails cleanly when the model never proposes", async () => {

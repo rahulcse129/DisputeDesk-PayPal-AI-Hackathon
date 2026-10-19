@@ -11,7 +11,8 @@ export async function GET(req: NextRequest) {
     const q = req.nextUrl.searchParams.get("q") ?? "";
     const cat = req.nextUrl.searchParams.get("category");
     const category = (CATEGORIES as readonly string[]).includes(cat ?? "") ? (cat as Category) : undefined;
-    return Response.json({ cases: getStore().search(q, { category, limit: 100 }) });
+    const store = getStore();
+    return Response.json({ cases: await store.search(q, { category, limit: 100 }), backend: store.searchBackend() });
   } catch (e) {
     return errorResponse(e);
   }

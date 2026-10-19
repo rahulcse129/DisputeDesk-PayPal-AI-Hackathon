@@ -53,7 +53,13 @@ The badges in the top right of every page show which mode is active.
 | `ANTHROPIC_SERVER_FALLBACK` | `true` | Server-side refusal fallback (beta) for supported models |
 | `GEMINI_API_KEY` | empty | Enables the Gemini agent (`GOOGLE_API_KEY` also works) |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Model for the Gemini agent |
+| `GEMINI_FALLBACK_MODEL` | `gemini-3.5-flash-lite` | Used if the main model stays overloaded (503/429) after retries. `none` disables it. |
 | `DATABASE_PATH` | `./data/disputedesk.db` | SQLite file for cases |
+| `ELASTIC_URL` or `ELASTIC_CLOUD_ID` | empty | Turns on Elastic search for case history and the agent's memory |
+| `ELASTIC_API_KEY` | empty | Elastic API key |
+| `ELASTIC_INDEX` | `disputedesk-cases` | Index name |
+| `ELASTIC_SEMANTIC` | `true` | Index a `semantic_text` field for hybrid keyword + semantic search |
+| `ELASTIC_INFERENCE_ID` | cluster default | Inference endpoint for `semantic_text` (e.g. an ELSER or E5 endpoint) |
 
 All secrets are read server-side only. `.env*` files are git-ignored except `.env.example`.
 
@@ -96,11 +102,12 @@ The agent (`lib/agent.ts`) is a **tool-use loop** that runs on Claude (Anthropic
 
 What makes it more than a prompt:
 
-- **Learns from history.** Every case (dispute, recommendation, merchant decision, outcome) is stored and searchable with SQLite FTS5 + bm25. The agent cites precedent, e.g. *"a similar past case (HIST-0801) with the same approach ended as won"*. Seeded history includes a **lost** contest, which teaches it when to refund instead.
+- **Learns from history.** Every case (dispute, recommendation, merchant decision, outcome) is stored and searchable. With **Elastic** configured, search is hybrid keyword + semantic (see [Sponsor tools](#sponsor-tools)); otherwise SQLite FTS5 + bm25. The agent cites precedent, e.g. *"a similar past case (HIST-0801) with the same approach ended as won"*. Seeded history includes a **lost** contest, which teaches it when to refund instead.
 - **Structured, validated output.** Every tool input and the final proposal are validated with Zod, and the tool JSON schemas are generated from the same Zod schemas. An invalid proposal goes back to Claude as an `is_error` tool result so it can fix it.
 - **Visible reasoning.** The UI shows each tool call with its input, result and timing. On supported models it also shows Claude's short progress notes between tool calls (`thinking.display: "updates"`).
 - **Safe by construction.** The agent's tools are read-only, and `propose_resolution` only *records* a proposal. Money-moving and messaging calls live in `lib/actions.ts`, which only the approve route imports. A test asserts that no agent tool can refund, accept, send or submit.
 - **Prompt-injection aware.** Buyer messages are marked as untrusted data in the system prompt, and every tool is scoped to the dispute being analyzed. A buyer message saying "look at dispute X" can't make the agent read another case.
+- **Resilient to overload.** Gemini calls retry with exponential backoff on 429/5xx. If the main model is still busy (Gemini returns *503 high demand* during spikes), the run restarts on `GEMINI_FALLBACK_MODEL`, and the trace and the case record which model answered.
 - **Robust.** On Gemini, model turns are passed back unchanged so thought signatures survive between turns, and thought summaries appear in the trace. On Claude it handles parallel tool calls, `pause_turn`, `max_tokens` and `refusal` stop reasons. Server-side refusal fallback (beta) is on by default for supported models. API errors are turned into plain-language messages.
 
 ---
@@ -119,10 +126,12 @@ flowchart LR
     A2[POST /api/disputes/:id/analyze<br/>NDJSON step stream]
     A3[POST /api/disputes/:id/approve]
     A4[GET /api/cases/search]
+    HC[GET /api/health]
     AG[Agent loop<br/>lib/agent.ts]
     T[Read-only tools<br/>lib/agent-tools.ts]
     X[Action executor<br/>lib/actions.ts]
-    S[(CaseStore<br/>SQLite + FTS5)]
+    S[(SQLite<br/>cases + approval lock)]
+    ES[(Elastic<br/>hybrid semantic search)]
     DS[Data source<br/>lib/disputes.ts]
   end
 
@@ -134,10 +143,11 @@ flowchart LR
   V --> A2 --> AG
   AG <--> C
   AG --> T --> DS
-  T --> S
   V -- merchant clicks Approve --> A3 --> X --> PP
   A3 -- idempotency claim --> S
-  H --> A4 --> S
+  H --> A4 --> ES
+  T -- search_similar_cases --> ES
+  S -. mirrored on every save .-> ES
   DS --> PP
   DS -.mock mode.-> M
   A2 --> S
@@ -161,15 +171,19 @@ lib/
   agent-offline.ts             deterministic fallback agent
   actions.ts                   executes approved actions (only module that moves money)
   store.ts                     CaseStore interface + SQLite implementation
+  elastic.ts                   Elastic index, hybrid query, SQLite-backed wrapper with fallback
+  case-text.ts                 searchable text shared by SQLite FTS and Elastic
   service.ts                   analyze / approve / reject logic
 tests/                         Vitest
+postman/                       Postman collections + environments (app API and PayPal sandbox)
+render.yaml                    Render blueprint
 ```
 
 ### Safety and correctness
 
 - **Approval gate.** `POST /approve` is the only path to `lib/actions.ts`. It requires an analyzed case, validates the body with Zod (`draft_message` up to 2000 characters, `action` from an allow-list, no extra fields), and the UI asks for a second confirmation that spells out what will happen.
 - **Idempotency.** Before executing, the route claims the dispute in an `approvals` table inside a `BEGIN IMMEDIATE` transaction. Double-clicks, retries and concurrent requests get `409`, and a test runs two approvals in parallel to prove only one executes. A failed execution releases the claim so the merchant can retry. A successful one never runs again.
-- **Swappable storage.** Routes and the agent only use the `CaseStore` interface (`get`, `list`, `upsert`, `search`, `claimApproval`, …). A Postgres or Elasticsearch implementation only needs to replace `SqliteCaseStore`.
+- **Swappable storage.** Routes and the agent only use the `CaseStore` interface (`get`, `list`, `upsert`, `search`, `claimApproval`, …). Elastic plugs in as a wrapper around it, and a Postgres implementation would only need to replace `SqliteCaseStore`.
 
 ---
 
@@ -190,7 +204,9 @@ The repo includes a `render.yaml` blueprint.
 
 1. Push the repo to GitHub, then in Render choose **New → Blueprint** and pick the repo.
 2. Fill in the `sync: false` secrets when prompted: `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` (set `AI_PROVIDER=gemini` to force Gemini), and for sandbox mode `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` with `USE_MOCK_PAYPAL=false`.
-3. Deploy. Build is `npm ci && npm run build`, start is `npm start` (Next.js reads Render's `PORT`), and the health check is `/api/disputes`.
+3. Optionally add `ELASTIC_URL` (or `ELASTIC_CLOUD_ID`) and `ELASTIC_API_KEY` to turn on Elastic search.
+4. Deploy. Build is `npm ci && npm run build`, start is `npm start` (Next.js reads Render's `PORT`), and the health check is `/api/health`, which doesn't call PayPal or the AI provider, so an upstream outage can't fail a deploy.
+5. Run the Postman collection against the live URL (see [Postman](#postman)) as a smoke test.
 
 Notes:
 
@@ -210,9 +226,46 @@ npm test
 
 - **Agent output schema:** valid and invalid resolutions (bad enums, confidence out of range, empty draft, extra fields, missing fields).
 - **Tool safety:** the agent's tool list contains no money-moving or messaging tool, every tool schema is a valid object schema, and access to another dispute is refused.
-- **Gemini loop** (mocked SDK): provider selection, parallel calls answered by id, thought signatures passed back, an invalid proposal returned as an error and fixed, cross-dispute access refused, clean failure when no proposal arrives.
+- **Gemini loop** (mocked SDK): provider selection, parallel calls answered by id, thought signatures passed back, an invalid proposal returned as an error and fixed, cross-dispute access refused, clean failure when no proposal arrives, retry then fallback when the main model is overloaded.
+- **Elastic search** (in-memory fake cluster): semantic index creation and SQLite backfill, keyword-only fallback when the cluster has no inference endpoint, category and exclusion filters, mirroring new cases, falling back to SQLite when Elastic is down, and feeding the agent's `search_similar_cases`.
 - **Agent runs:** each of the 10 seeded disputes produces a schema-valid resolution with the expected recommendation and tool sequence.
 - **Approve route:** requires analysis, executes once, rejects repeats (409), concurrent approvals execute exactly once, uses the edited draft and action override, validates the body, allows a retry after a failure, and blocks approval after Reject or re-analysis after execution.
+
+Plus an end-to-end API test in Postman (14 requests, 34 assertions); see [Postman](#postman).
+
+---
+
+## Sponsor tools
+
+### Render
+
+Hosting. `render.yaml` is a ready-to-use Blueprint: Node 22, `npm ci && npm run build`, `npm start`, a health check at `/api/health`, a persistent disk for SQLite, and every secret marked `sync: false` so it's entered in the dashboard, never committed. See [Deploying to Render](#deploying-to-render).
+
+### Elastic
+
+Elastic powers the agent's memory and the case history search.
+
+- **Hybrid search.** Each case is indexed with keyword fields (category, status, recommendation, result) plus its text as both an English-analyzed `text` field and a `semantic_text` field. A query combines BM25 keyword relevance with semantic similarity in one `bool` query. "Parcel vanished, never showed up" finds past *item not received* cases even with no words in common.
+- **Agent memory.** The agent's `search_similar_cases` tool runs on Elastic, so its precedent ("a similar past case ended as won") comes from semantic matches, not just keyword overlap.
+- **Design.** SQLite remains the system of record and keeps the approval lock, which needs a real transaction. Every save is mirrored to Elastic, and existing cases are backfilled on startup. If Elastic is unreachable, search quietly falls back to SQLite FTS so the app keeps working. The case history page shows which engine answered.
+- **Setup.** Create an Elastic Cloud deployment or serverless project, then create an API key. Set `ELASTIC_URL` (or `ELASTIC_CLOUD_ID`) and `ELASTIC_API_KEY`, and restart. The index and mappings are created automatically. If the cluster has no inference endpoint for `semantic_text`, DisputeDesk creates a keyword-only index and says so in the log; set `ELASTIC_INFERENCE_ID` to use a specific endpoint.
+
+### Postman
+
+The `postman/` folder has two collections and three environments:
+
+| File | What it's for |
+| --- | --- |
+| `DisputeDesk-API.postman_collection.json` | End-to-end test of DisputeDesk's own API: health, queue, detail, 404, AI analysis (checks the output schema), approval with an edited draft, **idempotency (second approve returns 409)**, body validation (400), reject, approve-after-reject (409), and case search. 14 requests, 34 assertions. It picks open disputes automatically, so it can be rerun. |
+| `PayPal-Sandbox.postman_collection.json` | Every PayPal endpoint DisputeDesk uses, against the sandbox, with automatic OAuth: disputes, captures, orders, trackers, provide evidence, refund (with `PayPal-Request-Id`), accept claim, send message. It also has the **sandbox-only simulation** endpoints (`require-evidence`, `adjudicate`) for playing PayPal's part and settling a dispute in the seller's or buyer's favor. |
+| `DisputeDesk-Local` / `DisputeDesk-Render` environments | `baseUrl` for local and deployed runs |
+| `PayPal-Sandbox` environment | `clientId` / `clientSecret` (secret type, empty in the repo) |
+
+Run it in Postman (Import, select the `postman/` folder, then use the Collection Runner), or from the command line:
+
+```bash
+npx newman run postman/DisputeDesk-API.postman_collection.json -e postman/DisputeDesk-Local.postman_environment.json
+```
 
 ## Roadmap
 

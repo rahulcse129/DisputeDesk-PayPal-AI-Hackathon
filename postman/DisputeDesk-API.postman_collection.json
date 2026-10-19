@@ -1,0 +1,603 @@
+{
+  "info": {
+    "name": "DisputeDesk API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "DisputeDesk's own REST API: dispute queue, AI analysis, merchant approval (with idempotency) and case search.\n\nRun the whole collection top to bottom (Collection Runner or `newman`). The first request picks two disputes that haven't been actioned yet, so the run can be repeated; after about 5 runs in mock mode, reset the demo data with `npm run reset`.\n\nSet `baseUrl` to http://localhost:3000 or your Render URL."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "disputeId",
+      "value": "PP-D-1008"
+    },
+    {
+      "key": "rejectId",
+      "value": "PP-D-1005"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "health"
+          ]
+        },
+        "description": "Liveness check used by Render. Doesn't call PayPal or the AI provider."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+              "const b = pm.response.json();",
+              "pm.test(\"app is healthy\", () => pm.expect(b.ok).to.eql(true));",
+              "pm.test(\"reports PayPal, AI and search modes\", () => {",
+              "  pm.expect(b.paypalMode).to.be.oneOf([\"mock\", \"sandbox\"]);",
+              "  pm.expect(b.aiMode).to.be.oneOf([\"claude\", \"gemini\", \"offline\"]);",
+              "  pm.expect(b.search).to.be.oneOf([\"sqlite\", \"elastic\", \"elastic-semantic\"]);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Disputes",
+      "item": [
+        {
+          "name": "List disputes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"returns a dispute queue\", () => pm.expect(b.disputes).to.be.an(\"array\").that.is.not.empty);",
+                  "pm.test(\"each item has a case status\", () => b.disputes.forEach(d => pm.expect(d.caseStatus).to.be.oneOf([\"new\", \"analyzed\", \"approved\", \"resolved\", \"rejected\"])));",
+                  "// Pick two disputes that haven't been actioned, so the run can be repeated.",
+                  "const open = b.disputes.filter(d => d.caseStatus === \"new\" || d.caseStatus === \"analyzed\");",
+                  "pm.test(\"at least two open disputes left (else run `npm run reset`)\", () => pm.expect(open.length).to.be.at.least(2));",
+                  "if (open[0]) pm.collectionVariables.set(\"disputeId\", open[0].dispute.id);",
+                  "if (open[1]) pm.collectionVariables.set(\"rejectId\", open[1].dispute.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get dispute detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/{{disputeId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "{{disputeId}}"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"includes dispute, order and tracking\", () => {",
+                  "  pm.expect(b.dispute.id).to.eql(pm.collectionVariables.get(\"disputeId\"));",
+                  "  pm.expect(b.order).to.be.an(\"object\");",
+                  "  pm.expect(b.tracking.status).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get unknown dispute (404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/PP-D-DOES-NOT-EXIST",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "PP-D-DOES-NOT-EXIST"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AI agent",
+      "item": [
+        {
+          "name": "Analyze dispute",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/{{disputeId}}/analyze",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "{{disputeId}}",
+                "analyze"
+              ]
+            },
+            "description": "Runs the AI agent. Add the header `Accept: application/x-ndjson` to stream each step as it happens."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const c = pm.response.json().case;",
+                  "const r = c.resolution;",
+                  "pm.test(\"case is analyzed\", () => pm.expect(c.status).to.eql(\"analyzed\"));",
+                  "pm.test(\"recommendation is accept, refund or contest\", () => pm.expect(r.recommendation).to.be.oneOf([\"accept\", \"refund\", \"contest\"]));",
+                  "pm.test(\"category is valid\", () => pm.expect(r.category).to.be.oneOf([\"item_not_received\", \"not_as_described\", \"unauthorized\", \"duplicate\", \"other\"]));",
+                  "pm.test(\"confidence is between 0 and 1\", () => pm.expect(r.confidence).to.be.within(0, 1));",
+                  "pm.test(\"has reasoning, evidence and a draft\", () => {",
+                  "  pm.expect(r.reasoning.length).to.be.above(20);",
+                  "  pm.expect(r.evidence_points).to.be.an(\"array\");",
+                  "  pm.expect(r.draft_message.length).to.be.above(40);",
+                  "});",
+                  "pm.test(\"agent trace ends with propose_resolution\", () => pm.expect(c.trace.filter(s => s.kind === \"tool\").pop().tool).to.eql(\"propose_resolution\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Analyze second dispute",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/{{rejectId}}/analyze",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "{{rejectId}}",
+                "analyze"
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Merchant decision",
+      "item": [
+        {
+          "name": "Approve: invalid body is rejected (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/{{disputeId}}/approve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "{{disputeId}}",
+                "approve"
+              ]
+            },
+            "description": "The body is validated: `action` must be accept, refund or contest; `draft_message` 10-2000 chars; no extra fields.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"wire_money\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve with edited draft",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/{{disputeId}}/approve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "{{disputeId}}",
+                "approve"
+              ]
+            },
+            "description": "Executes the recommended PayPal action (evidence, refund or accept claim). Pass `action` to override the AI's recommendation.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"draft_message\": \"Edited by the merchant in Postman: thank you for your patience while we resolved this.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"action executed\", () => pm.expect(b.outcome.ok).to.eql(true));",
+                  "pm.test(\"the merchant's edited draft was used\", () => pm.expect(b.case.finalMessage).to.include(\"Edited by the merchant in Postman\"));",
+                  "pm.test(\"PayPal calls are listed\", () => pm.expect(b.outcome.calls).to.be.an(\"array\").that.is.not.empty);",
+                  "pm.test(\"case moved to approved or resolved\", () => pm.expect(b.case.status).to.be.oneOf([\"approved\", \"resolved\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve again: idempotency guard (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/{{disputeId}}/approve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "{{disputeId}}",
+                "approve"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 409: an approval can't execute twice\", () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject recommendation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/{{rejectId}}/reject",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "{{rejectId}}",
+                "reject"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"Will call the buyer first.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"case marked for manual review\", () => pm.expect(pm.response.json().case.status).to.eql(\"rejected\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve after reject is blocked (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes/{{rejectId}}/approve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "disputes",
+                "{{rejectId}}",
+                "approve"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 409\", () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Case history",
+      "item": [
+        {
+          "name": "Search cases",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/cases/search?q=signature",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "cases",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "signature"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test(\"returns matching cases\", () => pm.expect(b.cases).to.be.an(\"array\").that.is.not.empty);",
+                  "pm.test(\"reports the search engine\", () => pm.expect(b.backend).to.be.oneOf([\"sqlite\", \"elastic\", \"elastic-semantic\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search by category",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/cases/search?q=&category=duplicate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "cases",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "key": "category",
+                  "value": "duplicate"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"only duplicate-charge cases\", () => pm.response.json().cases.forEach(c => pm.expect(c.category).to.eql(\"duplicate\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Semantic search example",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/cases/search?q=parcel vanished never showed up",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "cases",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "parcel vanished never showed up"
+                }
+              ]
+            },
+            "description": "With Elastic semantic search on, this finds 'item not received' cases even without shared keywords."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -211,6 +211,8 @@ export async function runAgent(disputeId: string, opts: RunAgentOptions = {}): P
   const trace: AgentStep[] = [];
   const exec = createToolExecutor(disputeId, trace, opts.onStep);
   const mode: AiMode = opts.runner ? "offline" : aiMode();
+  // The model that actually answered (Gemini may fall back to a second model).
+  let model = aiModel(mode);
   try {
     const resolution =
       opts.runner || mode === "offline"
@@ -222,9 +224,9 @@ export async function runAgent(disputeId: string, opts: RunAgentOptions = {}): P
             },
           })
         : mode === "gemini"
-          ? await runGeminiAgent(disputeId, exec)
+          ? await runGeminiAgent(disputeId, exec).then((r) => ((model = r.model), r.resolution))
           : await runClaudeAgent(disputeId, exec);
-    return { resolution, trace, mode, model: aiModel(mode) };
+    return { resolution, trace, mode, model };
   } catch (e) {
     const message = friendlyError(e);
     exec.record({ kind: "error", summary: message });

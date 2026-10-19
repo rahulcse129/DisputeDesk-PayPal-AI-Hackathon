@@ -6,7 +6,7 @@ services:
     plan: starter # a persistent disk needs a paid plan; on "free", remove the disk block (cases reset on each deploy)
     buildCommand: npm ci && npm run build
     startCommand: npm start
-    healthCheckPath: /api/disputes
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "22"
@@ -26,8 +26,17 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-3.8-flash
+      - key: GEMINI_FALLBACK_MODEL
+        value: gemini-3.5-flash-lite
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-5-5
+      # Elastic powers case search and the agent's memory. Leave ELASTIC_URL empty to use SQLite search.
+      - key: ELASTIC_URL
+        sync: false
+      - key: ELASTIC_API_KEY
+        sync: false
+      - key: ELASTIC_INDEX
+        value: disputedesk-cases
       - key: DATABASE_PATH
         value: /var/data/disputedesk.db
     disk:

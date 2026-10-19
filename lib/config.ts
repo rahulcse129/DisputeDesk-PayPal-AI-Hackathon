@@ -22,6 +22,19 @@ export const config = {
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "",
     model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+    /** Used when the main model stays overloaded (503/429) after retries. Set to "none" to disable. */
+    fallbackModel: process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite",
+  },
+  elastic: {
+    /** Elasticsearch endpoint URL, or ELASTIC_CLOUD_ID for an Elastic Cloud deployment. */
+    url: process.env.ELASTIC_URL ?? "",
+    cloudId: process.env.ELASTIC_CLOUD_ID ?? "",
+    apiKey: process.env.ELASTIC_API_KEY ?? "",
+    index: process.env.ELASTIC_INDEX || "disputedesk-cases",
+    /** Semantic search via a semantic_text field (needs an inference endpoint on the cluster). */
+    semantic: bool(process.env.ELASTIC_SEMANTIC) ?? true,
+    /** Optional explicit inference endpoint for semantic_text; the cluster default is used otherwise. */
+    inferenceId: process.env.ELASTIC_INFERENCE_ID ?? "",
   },
   /** "anthropic" | "gemini" | "offline". Empty = pick the first provider with a key. */
   aiProvider: (process.env.AI_PROVIDER ?? "").toLowerCase(),

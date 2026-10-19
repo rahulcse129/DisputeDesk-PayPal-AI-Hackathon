@@ -68,7 +68,7 @@ export async function runReadTool(name: string, rawInput: unknown, scope: { disp
     case "search_similar_cases": {
       const parsed = SearchSimilarInput.safeParse(rawInput);
       if (!parsed.success) throw new ToolInputError(parsed.error.issues.map((i) => i.message).join("; "));
-      const results = getStore().search(parsed.data.query, { category: parsed.data.category, excludeId: scope.disputeId, limit: 5 });
+      const results = await getStore().search(parsed.data.query, { category: parsed.data.category, excludeId: scope.disputeId, limit: 5 });
       return {
         count: results.length,
         cases: results.map((c) => ({
